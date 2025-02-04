@@ -1,0 +1,2 @@
+data/elecAtmos.root filter=lfs diff=lfs merge=lfs -text
+data/detsimAtmos.root filter=lfs diff=lfs merge=lfs -text

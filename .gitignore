@@ -1,0 +1,4 @@
+# Ignore Unessary Directories
+build/
+data/
+plots/
