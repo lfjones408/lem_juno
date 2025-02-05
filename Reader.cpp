@@ -15,6 +15,7 @@
 #include <Identifier/CdID.h>
 
 const int MAX_TIMESTEPS = 1000;
+const int MAX_PMTID = 17612;
 
 std::vector<float> flattenEdepPos(const std::vector<std::vector<float>>& eventEdepPos) {
     std::vector<float> flatEdepPos;
@@ -317,6 +318,18 @@ public:
 
                 // calibFeatures.push_back(features);
                 calibChID.push_back(CalibId);
+            }
+
+            for(int j = 0; j < MAX_PMTID; j++){
+                if(std::find(calibChID.begin(), calibChID.end(), j) == calibChID.end()){
+                    calibPhi.push_back(JUNOPMTLocation::get_instance().GetPMTPhi(j));
+                    calibTheta.push_back(JUNOPMTLocation::get_instance().GetPMTTheta(j));
+                    calibmaxCharge.push_back(0);
+                    calibmaxTime.push_back(0);
+                    calibsumCharge.push_back(0);
+                    calibFHT.push_back(0);
+                    calibChID.push_back(j);
+                }
             }
 
             Phi.push_back(calibPhi);
