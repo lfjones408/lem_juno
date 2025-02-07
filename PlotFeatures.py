@@ -4,6 +4,7 @@ import h5py
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
+
 # Load the data
 with h5py.File('data/test.h5', 'r') as f:
     def print_group_contents(group, indent=0):
@@ -43,17 +44,6 @@ with h5py.File('data/test.h5', 'r') as f:
         Event_sumCharge = f[f'{event_key}/PMT/sumCharge'][:]
         Event_maxTime = f[f'{event_key}/PMT/maxTime'][:]
 
-        # # Print event level information
-        # print(f"Energy: {Event_energy}")
-        # print(f"Position: {Event_position}")
-        # print(f"NuType: {Event_nuType}")
-
-        # # Print Edep information
-        # print(f"Edep Shape    : {Event_Edep.shape}")
-        # print(f"Edep          : {Event_Edep}")
-        # print(f"EdepPos Shape : {Event_EdepPos.shape}")
-        # print(f"EdepPos       : {Event_EdepPos}")
-
         # Spherical to Cartesian coordinates
         r = 20.05 # m
         x = r * np.sin(Event_Theta) * np.cos(Event_Phi)
@@ -78,31 +68,48 @@ with h5py.File('data/test.h5', 'r') as f:
             # Scale marker sizes based on feature values
             marker_sizes = (feature_data / np.max(feature_data)) * 10
 
-            fig = plt.figure(figsize=(12, 8))
-            ax = fig.add_subplot(111, projection='3d')
+            fig1 = plt.figure(figsize=(12, 8))
+            ax1 = fig1.add_subplot(111, projection='3d')
 
             # Use feature_data for color gradient and marker_sizes for size
-            scatter = ax.scatter(x, y, z, c=feature_data, cmap='plasma', marker='o', s=marker_sizes, alpha=0.8)
+            sphericalPlot = ax1.scatter(x, y, z, c=feature_data, cmap='plasma', marker='o', s=marker_sizes, alpha=0.8)
 
             # Add Edep positions
-
             edepX, edepY, edepZ = Event_EdepPos[:, 0], Event_EdepPos[:, 1], Event_EdepPos[:, 2]
-            ax.scatter(edepX, edepY, edepZ, c='red', marker='x', s=50, label='Edep')
+            ax1.scatter(edepX, edepY, edepZ, c='red', marker='x', s=50, label='Edep')
 
-            ax.set_title(f'3D Plot of {feature_name} {event_key} PMT Data')
-            ax.set_xlabel('X')
-            ax.set_ylabel('Y')
-            ax.set_zlabel('Z')
-
-            # Set axis limits to zoom out
-            ax.set_xlim([-r, r])
-            ax.set_ylim([-r, r])
-            ax.set_zlim([-r, r])
+            ax1.set_title(f'3D Plot of {feature_name} {event_key} PMT Data')
+            ax1.set_xlabel('X')
+            ax1.set_ylabel('Y')
+            ax1.set_zlabel('Z')
 
             # Add color bar
-            cbar = plt.colorbar(scatter, ax=ax, pad=0.1)
-            cbar.set_label(feature_name)
+            cbarSpherecial = plt.colorbar(sphericalPlot, ax=ax1, pad=0.1)
+            cbarSpherecial.set_label(feature_name)
 
             # Save the plot in the event directory
             plt.savefig(f'{event_dir}/{feature_name}_3d.pdf')
-            plt.close()
+            plt.close(fig1)
+
+            # Create Mollweide projection plot
+            fig2 = plt.figure(figsize=(12, 8))
+            ax2 = fig2.add_subplot(111, projection='mollweide')
+
+            # Convert spherical coordinates to radians for Mollweide projection
+            phi_rad = Event_Phi
+            theta_rad = np.radians(90 - np.degrees(Event_Theta))  # Convert to colatitude
+
+            mollweidePlot = ax2.scatter(phi_rad, theta_rad, c=feature_data, cmap='plasma', marker='o', s=marker_sizes, alpha=0.8)
+
+            ax2.set_title(f'Mollweide Projection of {feature_name} {event_key} PMT Data')
+            ax2.set_xlabel('Longitude')
+            ax2.set_ylabel('Latitude')
+            ax2.grid(True)
+
+            # Add color bar
+            cbarMollweide = plt.colorbar(mollweidePlot, ax=ax2, pad=0.1)
+            cbarMollweide.set_label(feature_name)
+
+            # Save the plot in the event directory
+            plt.savefig(f'{event_dir}/{feature_name}_mollweide.pdf')
+            plt.close(fig2)

@@ -10,7 +10,7 @@ distances = []
 
 # Define event data
 with h5py.File('data/test.h5', 'r') as f:
-    testEvent = f['/Event_0']
+    testEvent = f['/Event_9']
 
     testEvent_energy = testEvent['energy'][()]
     testEvent_position = (testEvent['vertex'][()])/1e3
@@ -25,7 +25,6 @@ with h5py.File('data/test.h5', 'r') as f:
 
     # Define weights for each feature
     weights = {
-        'position': 1.0,
         'phi': 1.0,
         'theta': 1.0,
         'maxCharge': 1.0,
@@ -53,7 +52,6 @@ with h5py.File('data/test.h5', 'r') as f:
         Event_FHT = f[f'{event_keys}/PMT/FHT'][:]
 
         # Calculate weighted Euclidean distances
-        position_distance = weights['position'] * np.linalg.norm(testEvent_position - Event_position)
         phi_distance = weights['phi'] * np.linalg.norm(testEvent_Phi - Event_Phi)
         theta_distance = weights['theta'] * np.linalg.norm(testEvent_Theta - Event_Theta)
         maxCharge_distance = weights['maxCharge'] * np.linalg.norm(testEvent_maxCharge - Event_maxCharge)
@@ -62,7 +60,7 @@ with h5py.File('data/test.h5', 'r') as f:
         FHT_distance = weights['FHT'] * np.linalg.norm(testEvent_FHT - Event_FHT)
 
         # Combine distances into a single metric
-        total_distance = (position_distance + phi_distance + theta_distance +
+        total_distance = (phi_distance + theta_distance +
                           maxCharge_distance + sumCharge_distance +
                           maxTime_distance + FHT_distance)
         
