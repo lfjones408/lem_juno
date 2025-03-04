@@ -2,6 +2,7 @@
 build/
 data/
 plots/
+test/
 
 # Ignore Unessary Files Types
 *.exe

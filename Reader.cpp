@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <cmath>
 #include <H5Cpp.h>
 #include <TFile.h>
 #include <TTree.h>
@@ -13,16 +14,51 @@
 #include <Event/GenEvt.h>
 #include <Identifier/Identifier.h>
 #include <Identifier/CdID.h>
+#include <map>
+#include <vector>
 
 const int MAX_TIMESTEPS = 1000;
 const int MAX_PMTID = 17612;
+const float radius = 20.5;
 
-std::vector<float> flattenEdepPos(const std::vector<std::vector<float>>& eventEdepPos) {
-    std::vector<float> flatEdepPos;
-    for (const auto& pos : eventEdepPos) {
-        flatEdepPos.insert(flatEdepPos.end(), pos.begin(), pos.end());
+std::vector<float> flatten(const std::vector<std::vector<float>>& vect) {
+    std::vector<float> flat;
+    for (const auto& pos : vect) {
+        flat.insert(flat.end(), pos.begin(), pos.end());
     }
-    return flatEdepPos;
+    return flat;
+}
+
+#include <iostream>
+#include <cmath>
+
+struct Vec3 {
+    double x, y, z;
+
+    Vec3 operator-(const Vec3& v) const { return {x - v.x, y - v.y, z - v.z}; }
+    double dot(const Vec3& v) const { return x * v.x + y * v.y + z * v.z; }
+    double length2() const { return x * x + y * y + z * z; }
+};
+
+bool LineIntersectsSphere(const Vec3& p0, const Vec3& p1, double r) {
+    Vec3 d = p1 - p0;        // Direction of the segment
+    Vec3 f = p0;             // Since the sphere is at (0,0,0), f = p0
+
+    double a = d.dot(d);
+    double b = 2 * f.dot(d);
+    double c = f.dot(f) - r * r;
+
+    double discriminant = b * b - 4 * a * c; // Quadratic formula discriminant
+
+    if (discriminant < 0) return false; // No real roots, no intersection
+
+    // Compute roots
+    double sqrtD = sqrt(discriminant);
+    double t1 = (-b - sqrtD) / (2 * a);
+    double t2 = (-b + sqrtD) / (2 * a);
+
+    // Check if at least one solution is within [0,1] (segment range)
+    return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1);
 }
 
 class JUNOPMTLocation {
@@ -69,7 +105,17 @@ private:
 
 class EventData {
 public:
+    // Elecsim data (not used)
     std::vector<std::vector<std::vector<short unsigned int>>> adcValues;
+
+    // Detsim data
+    // std::vector<std::vector<float>> Edep;
+    // std::vector<std::vector<std::vector<float>>> EdepPos;
+    // std::vector<std::vector<float>> vertex;
+    std::vector<float> energy;
+    std::vector<int> muType;
+
+    // Calib data
     std::vector<std::vector<int>> pmtID;
     std::vector<std::vector<float>> Phi;
     std::vector<std::vector<float>> Theta;
@@ -78,25 +124,23 @@ public:
     std::vector<std::vector<float>> sumCharge;
     std::vector<std::vector<float>> FHT;
     std::vector<std::vector<int>> PDGid;
-    std::vector<std::vector<float>> initTrack;
-    std::vector<std::vector<float>> exitTrack;
-    std::vector<std::vector<float>> Edep;
-    std::vector<std::vector<std::vector<float>>> EdepPos;
-    std::vector<std::vector<float>> vertex;
-    std::vector<float> energy;
-    std::vector<int> nuType;
+    std::vector<std::vector<std::vector<float>>> featureVector;
+    
     int MaxEvents;
+
+    // Add a new member variable to store tracks by event ID
+    std::map<int, std::vector<std::vector<float>>> eventTracks;
 
     void loadElecEDM(const std::string& filename) {
         TFile *elecEDM = TFile::Open(filename.c_str());
         if (!elecEDM || elecEDM->IsZombie()) {
-            std::cerr << "Error opening file" << std::endl;
+            std::cerr << "Error opening elec file" << std::endl;
             return;
         }
 
         TTree *CdWf = (TTree*)elecEDM->Get("Event/CdWaveform/CdWaveformEvt");
         if (!CdWf) {
-            std::cerr << "Error accessing TTree in file" << std::endl;
+            std::cerr << "Error accessing TTree in elec file" << std::endl;
             return;
         }
 
@@ -148,13 +192,13 @@ public:
     void loadDetSimEDM(const std::string& filename) {
         TFile *detEDM = TFile::Open(filename.c_str());
         if (!detEDM || detEDM->IsZombie()) {
-            std::cerr << "Error opening file" << std::endl;
+            std::cerr << "Error opening detsim file" << std::endl;
             return;
         }
 
         TTree *genevt = (TTree*)detEDM->Get("Event/Gen/GenEvt");
         if (!genevt) {
-            std::cerr << "Error accessing TTree in file" << std::endl;
+            std::cerr << "Error accessing TTree in detsim file" << std::endl;
             return;
         }
 
@@ -171,78 +215,70 @@ public:
         genevt->SetBranchAddress("GenEvt", &ge);
         genevt->GetBranch("GenEvt")->SetAutoDelete(true);
 
-        MaxEvents = genevt->GetEntries();
+        int SimMax = simevt->GetEntries();
 
-        for(int i = 0; i < MaxEvents; i++){
-            genevt->GetEntry(i);
+        std::cout << "SimMax: " << SimMax << std::endl;
+
+        int muontrks = 0;
+
+        for(int i = 0; i < SimMax; i++){
+            // genevt->GetEntry(i);
             simevt->GetEntry(i);
 
-            std::cout << "Event: " << i << std::endl;
+            // auto hepmc_genevt = ge->getEvent();
 
-            auto hepmc_genevt = ge->getEvent();
+            int evtid = se->getEventID();
 
             const std::vector<JM::SimTrack*>& tracks = se->getTracksVec();
+            
+            if(tracks.size() == 0){
+                continue;
+            }
 
-            std::vector<float> SimEdep;
-            std::vector<std::vector<float>> SimEdepPos;
+            std::cout << "Event ID: " << evtid << std::endl;
+
+            // std::cout << "Event ID: " << evtid << std::endl;
+
+            std::vector<std::vector<float>> eventTrackData;
 
             for(auto it = tracks.begin(); it != tracks.end(); ++it){
                 int simPDGid = (*it)->getPDGID();
-                float E = (*it)->getEdep();
+                // float E = (*it)->getEdepCDWaterBuffer();
 
-                std::vector<float> Edepvtx;
+                if(simPDGid == 13 || simPDGid == -13){
+                    muontrks++;
+                    
+                    std::vector<float> trackData;
 
-                if(E < 0.5){
-                    continue;
-                }
+                    // std::cout << "Init Position: " << (*it)->getInitX()/1000 << " " << (*it)->getInitY()/1000 << " " << (*it)->getInitZ() /1000 << std::endl;
 
-                SimEdep.push_back(E);
+                    Vec3 p0 = {(*it)->getInitX()/1000, (*it)->getInitY()/1000, (*it)->getInitZ()/1000};
+                    Vec3 p1 = {(*it)->getExitX()/1000, (*it)->getExitY()/1000, (*it)->getExitZ()/1000};
 
-                float EdepX = (*it)->getEdepX();
-                float EdepY = (*it)->getEdepY();
-                float EdepZ = (*it)->getEdepZ();
-
-                Edepvtx.push_back(EdepX);
-                Edepvtx.push_back(EdepY);
-                Edepvtx.push_back(EdepZ);
-
-                SimEdepPos.push_back(Edepvtx);
-                Edepvtx.clear();
-            }
-
-            Edep.push_back(SimEdep);
-            EdepPos.push_back(SimEdepPos);
-            SimEdep.clear();
-            SimEdepPos.clear();
-
-            std::vector<float> vtx;
-
-            for (auto iVtx = hepmc_genevt->vertices_begin();
-                 iVtx != hepmc_genevt->vertices_end();
-                 ++iVtx) {
-
-                const auto& vertex_pos = (*iVtx)->position();
-                
-                vtx.push_back(vertex_pos.x());
-                vtx.push_back(vertex_pos.y());
-                vtx.push_back(vertex_pos.z());
-
-                for (auto iPart = (*iVtx)->particles_in_const_begin(); 
-                     iPart != (*iVtx)->particles_in_const_end();
-                     ++iPart) {
-                    const auto& part_momentum = (*iPart)->momentum();
-
-                    int ParticleType = (*iPart)->pdg_id();
-
-                    if(ParticleType == 12 || ParticleType == -12 || ParticleType == 14 || ParticleType == -14){
-                        energy.push_back(part_momentum.e());
-                        nuType.push_back(ParticleType);
+                    if(LineIntersectsSphere(p0, p1, radius)){
+                        std::cout << "Muon Track intersects sphere" << std::endl;
                     }
+
+                    trackData.push_back((*it)->getInitX() / 1000);
+                    trackData.push_back((*it)->getInitY() / 1000);
+                    trackData.push_back((*it)->getInitZ() / 1000);
+                    trackData.push_back((*it)->getExitX() / 1000);
+                    trackData.push_back((*it)->getExitY() / 1000);
+                    trackData.push_back((*it)->getExitZ() / 1000);
+                    trackData.push_back((*it)->getInitPx());
+                    trackData.push_back((*it)->getInitPy());
+                    trackData.push_back((*it)->getInitPz());
+
+                    eventTrackData.push_back(trackData);
                 }
             }
 
-            vertex.push_back(vtx);
+            eventTracks[evtid] = eventTrackData;
+
+            // std::cout << "Length of eventTrackData: " << eventTrackData.size() << std::endl;
         }
+
+        std::cout << "Muon Tracks: " << muontrks << std::endl;
 
         detEDM->Close();
     }
@@ -250,13 +286,13 @@ public:
     void loadCalibEDM(const std::string& filename) {
         TFile *calibEDM = TFile::Open(filename.c_str());
         if (!calibEDM || calibEDM->IsZombie()) {
-            std::cerr << "Error opening file" << std::endl;
+            std::cerr << "Error opening calib file" << std::endl;
             return;
         }
 
         TTree *calib = (TTree*)calibEDM->Get("Event/CdLpmtCalib/CdLpmtCalibEvt");
         if (!calib) {
-            std::cerr << "Error accessing TTree in file" << std::endl;
+            std::cerr << "Error accessing TTree in calib file" << std::endl;
             return;
         }
 
@@ -264,9 +300,13 @@ public:
         calib->SetBranchAddress("CdLpmtCalibEvt", &cal);
         calib->GetBranch("CdLpmtCalibEvt")->SetAutoDelete(true);
 
-        int calNum = calib->GetEntries();
+        int calibMax = calib->GetEntries();
 
-        for(int i = 0; i < calNum; i++){
+        std::cout << "CalibMax: " << calibMax << std::endl;
+
+        MaxEvents = calibMax;
+
+        for(int i = 0; i < calibMax; i++){
             calib->GetEntry(i);
 
             const auto &calibCh = cal->calibPMTCol();
@@ -275,19 +315,19 @@ public:
             
             std::vector<int> calibChID;
             calibChID.reserve(calibSize);
-            // std::vector<std::vector<float>> calibFeatures;
-            // calibFeatures.reserve(calibSize);
+            std::vector<std::vector<float>> calibFeatures;
+            calibFeatures.reserve(MAX_PMTID);
 
-            std::vector<float> calibPhi;
-            std::vector<float> calibTheta;
-            std::vector<float> calibmaxCharge;
-            std::vector<float> calibmaxTime;
-            std::vector<float> calibsumCharge;
-            std::vector<float> calibFHT;
-            calibmaxCharge.reserve(calibSize);
-            calibmaxTime.reserve(calibSize);
-            calibsumCharge.reserve(calibSize);
-            calibFHT.reserve(calibSize);
+            // std::vector<float> calibPhi;
+            // std::vector<float> calibTheta;
+            // std::vector<float> calibmaxCharge;
+            // std::vector<float> calibmaxTime;
+            // std::vector<float> calibsumCharge;
+            // std::vector<float> calibFHT;
+            // calibmaxCharge.reserve(calibSize);
+            // calibmaxTime.reserve(calibSize);
+            // calibsumCharge.reserve(calibSize);
+            // calibFHT.reserve(calibSize);
 
             for(auto it = calibCh.begin(); it != calibCh.end(); ++it){
                 int CalibId = CdID::module(Identifier((*it)->pmtId()));
@@ -297,8 +337,11 @@ public:
                     std::cerr << "CalibID: " << CalibId << std::endl;
                 }
 
-                calibPhi.push_back(JUNOPMTLocation::get_instance().GetPMTPhi(CalibId));
-                calibTheta.push_back(JUNOPMTLocation::get_instance().GetPMTTheta(CalibId));
+                float phiIt = JUNOPMTLocation::get_instance().GetPMTPhi(CalibId);
+                float thetaIt = JUNOPMTLocation::get_instance().GetPMTTheta(CalibId);
+
+                // calibPhi.push_back(phiIt);
+                // calibTheta.push_back(thetaIt);
 
 
                 float maxChargeIt   = (*it)->maxCharge();
@@ -306,54 +349,77 @@ public:
                 float sumChargeIt   = (*it)->sumCharge();
                 float FHTIt         = (*it)->firstHitTime();
                 
-                // features.push_back(maxChargeIt);
-                // features.push_back(maxTimeIt);
-                // features.push_back(sumChargeIt);
-                // features.push_back(FHTIt);
+                std::vector<float> features;
 
-                calibmaxCharge.push_back(maxChargeIt);
-                calibmaxTime.push_back(maxTimeIt);
-                calibsumCharge.push_back(sumChargeIt);
-                calibFHT.push_back(FHTIt);
+                features.push_back(phiIt);
+                features.push_back(thetaIt);
+                features.push_back(FHTIt);
+                features.push_back(maxTimeIt);
+                features.push_back(maxChargeIt);
+                features.push_back(sumChargeIt);
+                
 
-                // calibFeatures.push_back(features);
+                // calibmaxCharge.push_back(maxChargeIt);
+                // calibmaxTime.push_back(maxTimeIt);
+                // calibsumCharge.push_back(sumChargeIt);
+                // calibFHT.push_back(FHTIt);
+
+                calibFeatures.push_back(features);
+                features.clear();
                 calibChID.push_back(CalibId);
             }
 
             for(int j = 0; j < MAX_PMTID; j++){
                 if(std::find(calibChID.begin(), calibChID.end(), j) == calibChID.end()){
-                    calibPhi.push_back(JUNOPMTLocation::get_instance().GetPMTPhi(j));
-                    calibTheta.push_back(JUNOPMTLocation::get_instance().GetPMTTheta(j));
-                    calibmaxCharge.push_back(0);
-                    calibmaxTime.push_back(0);
-                    calibsumCharge.push_back(0);
-                    calibFHT.push_back(0);
-                    calibChID.push_back(j);
+                    std::vector<float> features;
+
+                    features.push_back(JUNOPMTLocation::get_instance().GetPMTPhi(j));
+                    features.push_back(JUNOPMTLocation::get_instance().GetPMTTheta(j));
+                    features.push_back(0);
+                    features.push_back(0);
+                    features.push_back(0);
+                    features.push_back(0);
+
+                    // calibPhi.push_back(JUNOPMTLocation::get_instance().GetPMTPhi(j));
+                    // calibTheta.push_back(JUNOPMTLocation::get_instance().GetPMTTheta(j));
+                    // calibmaxCharge.push_back(0);
+                    // calibmaxTime.push_back(0);
+                    // calibsumCharge.push_back(0);
+                    // calibFHT.push_back(0);
+                    // calibChID.push_back(j);
+
+                    calibFeatures.push_back(features);
+                    features.clear();
                 }
             }
 
-            Phi.push_back(calibPhi);
-            Theta.push_back(calibTheta);
-            maxCharge.push_back(calibmaxCharge);
-            maxTime.push_back(calibmaxTime);
-            sumCharge.push_back(calibsumCharge);
-            FHT.push_back(calibFHT);
+            std::cout << "Calib Event: " << i << std::endl;
 
-            calibPhi.clear();
-            calibTheta.clear();
-            calibmaxCharge.clear();
-            calibmaxTime.clear();
-            calibsumCharge.clear();
-            calibFHT.clear();
+            featureVector.push_back(calibFeatures);
+            calibFeatures.clear();
+
+            // Phi.push_back(calibPhi);
+            // Theta.push_back(calibTheta);
+            // maxCharge.push_back(calibmaxCharge);
+            // maxTime.push_back(calibmaxTime);
+            // sumCharge.push_back(calibsumCharge);
+            // FHT.push_back(calibFHT);
+
+            // calibPhi.clear();
+            // calibTheta.clear();
+            // calibmaxCharge.clear();
+            // calibmaxTime.clear();
+            // calibsumCharge.clear();
+            // calibFHT.clear();
             
-            pmtID.push_back(calibChID);
-            calibChID.clear();
+            // pmtID.push_back(calibChID);
+            // calibChID.clear();
         }
 
         calibEDM->Close();
     }
 
-    void h5Test(const std::string& filename) {
+    void h5Save(const std::string& filename) {
         try {
             H5::H5File file(filename, H5F_ACC_TRUNC);
 
@@ -366,66 +432,70 @@ public:
                 H5::DataSpace scalarSpace(H5S_SCALAR);
                 H5::DataSpace vectorSpace(1, new hsize_t[1]{3});
 
-                hsize_t dimsFeature[1] = {maxCharge[i].size()};
-                H5::DataSpace FeatureSpace(1, dimsFeature);
+                // hsize_t dimsFeature[1] = {maxCharge[i].size()};
+                // H5::DataSpace FeatureSpace(1, dimsFeature);
 
-                hsize_t dimsEdep[1] = {Edep[i].size()};
-                H5::DataSpace EdepSpace(1, dimsEdep);
-                hsize_t dimsEdepPos[2] = {EdepPos[i].size(), 3};
-                H5::DataSpace EdepPosSpace(2, dimsEdepPos);
+                // hsize_t dimsEdep[1] = {Edep[i].size()};
+                // H5::DataSpace EdepSpace(1, dimsEdep);
 
-                // Write the data
-                H5::DataSet energyDataset = eventGroup.createDataSet("energy", H5::PredType::NATIVE_FLOAT, scalarSpace);
-                energyDataset.write(&energy[i], H5::PredType::NATIVE_FLOAT);
-                energyDataset.close();
+                // hsize_t dimsEdepPos[2] = {EdepPos[i].size(), 3};
+                // H5::DataSpace EdepPosSpace(2, dimsEdepPos);
 
-                H5::DataSet nuTypeDataset = eventGroup.createDataSet("nuType", H5::PredType::NATIVE_INT, scalarSpace);
-                nuTypeDataset.write(&nuType[i], H5::PredType::NATIVE_INT);
-                nuTypeDataset.close();
+                // if (eventTracks.find(i) != eventTracks.end()) {
+                //     const auto& tracks = eventTracks[i];
+                //     hsize_t muTrackDims[2] = {tracks.size(), 9}; // 9 elements per track
+                //     H5::DataSpace muTrackSpace(2, muTrackDims);
 
-                H5::DataSet vertexDataset = eventGroup.createDataSet("vertex", H5::PredType::NATIVE_FLOAT, vectorSpace);
-                vertexDataset.write(vertex[i].data(), H5::PredType::NATIVE_FLOAT);
-                vertexDataset.close();
+                //     std::vector<float> flatMuTrack;
+                //     for (const auto& track : tracks) {
+                //         flatMuTrack.insert(flatMuTrack.end(), track.begin(), track.end());
+                //     }
 
-                H5::DataSet EdepDataset = eventGroup.createDataSet("Edep", H5::PredType::NATIVE_FLOAT, EdepSpace);
-                EdepDataset.write(Edep[i].data(), H5::PredType::NATIVE_FLOAT);
-                EdepDataset.close();
-
-                std::vector<float> flatEdepPos = flattenEdepPos(EdepPos[i]);
-                H5::DataSet EdepPosDataset = eventGroup.createDataSet("EdepPos", H5::PredType::NATIVE_FLOAT, EdepPosSpace);
-                EdepPosDataset.write(flatEdepPos.data(), H5::PredType::NATIVE_FLOAT);
-                EdepPosDataset.close();            
+                //     H5::DataSet muTrackDataset = eventGroup.createDataSet("muTrack", H5::PredType::NATIVE_FLOAT, muTrackSpace);
+                //     muTrackDataset.write(flatMuTrack.data(), H5::PredType::NATIVE_FLOAT);
+                //     muTrackDataset.close();
+                // }
 
                 std::string pmtGroupPath = eventPath + "/PMT";
                 H5::Group pmtGroup(eventGroup.createGroup(pmtGroupPath));
+                
+                if (i < featureVector.size()) {
+                    hsize_t dimsPmtFeatureVector[2] = {featureVector[i].size(), 6};
+                    H5::DataSpace PmtFeatureVectorSpace(2, dimsPmtFeatureVector);
 
-                H5::DataSet pmtIDDataset = pmtGroup.createDataSet("PMTID", H5::PredType::NATIVE_INT, FeatureSpace);
-                pmtIDDataset.write(pmtID[i].data(), H5::PredType::NATIVE_INT);
-                pmtIDDataset.close();
+                    std::vector<float> flatFeatureVector = flatten(featureVector[i]);
+                    H5::DataSet pmtFeatureVectorDataset = pmtGroup.createDataSet("FeatureVector", H5::PredType::NATIVE_FLOAT, PmtFeatureVectorSpace);
+                    pmtFeatureVectorDataset.write(flatFeatureVector.data(), H5::PredType::NATIVE_FLOAT);
+                    pmtFeatureVectorDataset.close();
+                }
 
-                H5::DataSet PhiDataset = pmtGroup.createDataSet("Phi", H5::PredType::NATIVE_FLOAT, FeatureSpace);
-                PhiDataset.write(Phi[i].data(), H5::PredType::NATIVE_FLOAT);
-                PhiDataset.close();
+                // H5::DataSet pmtIDDataset = pmtGroup.createDataSet("PMTID", H5::PredType::NATIVE_INT, FeatureSpace);
+                // pmtIDDataset.write(pmtID[i].data(), H5::PredType::NATIVE_INT);
+                // pmtIDDataset.close();
 
-                H5::DataSet ThetaDataset = pmtGroup.createDataSet("Theta", H5::PredType::NATIVE_FLOAT, FeatureSpace);
-                ThetaDataset.write(Theta[i].data(), H5::PredType::NATIVE_FLOAT);
-                ThetaDataset.close();
+                // H5::DataSet PhiDataset = pmtGroup.createDataSet("Phi", H5::PredType::NATIVE_FLOAT, FeatureSpace);
+                // PhiDataset.write(Phi[i].data(), H5::PredType::NATIVE_FLOAT);
+                // PhiDataset.close();
 
-                H5::DataSet maxChargeDataset = pmtGroup.createDataSet("maxCharge", H5::PredType::NATIVE_FLOAT, FeatureSpace);
-                maxChargeDataset.write(maxCharge[i].data(), H5::PredType::NATIVE_FLOAT);
-                maxChargeDataset.close();
+                // H5::DataSet ThetaDataset = pmtGroup.createDataSet("Theta", H5::PredType::NATIVE_FLOAT, FeatureSpace);
+                // ThetaDataset.write(Theta[i].data(), H5::PredType::NATIVE_FLOAT);
+                // ThetaDataset.close();
 
-                H5::DataSet maxTimeDataset = pmtGroup.createDataSet("maxTime", H5::PredType::NATIVE_FLOAT, FeatureSpace);
-                maxTimeDataset.write(maxTime[i].data(), H5::PredType::NATIVE_FLOAT);
-                maxTimeDataset.close();
+                // H5::DataSet maxChargeDataset = pmtGroup.createDataSet("maxCharge", H5::PredType::NATIVE_FLOAT, FeatureSpace);
+                // maxChargeDataset.write(maxCharge[i].data(), H5::PredType::NATIVE_FLOAT);
+                // maxChargeDataset.close();
 
-                H5::DataSet sumChargeDataset = pmtGroup.createDataSet("sumCharge", H5::PredType::NATIVE_FLOAT, FeatureSpace);
-                sumChargeDataset.write(sumCharge[i].data(), H5::PredType::NATIVE_FLOAT);
-                sumChargeDataset.close();
+                // H5::DataSet maxTimeDataset = pmtGroup.createDataSet("maxTime", H5::PredType::NATIVE_FLOAT, FeatureSpace);
+                // maxTimeDataset.write(maxTime[i].data(), H5::PredType::NATIVE_FLOAT);
+                // maxTimeDataset.close();
 
-                H5::DataSet FHTDataset = pmtGroup.createDataSet("FHT", H5::PredType::NATIVE_FLOAT, FeatureSpace);
-                FHTDataset.write(FHT[i].data(), H5::PredType::NATIVE_FLOAT);
-                FHTDataset.close();
+                // H5::DataSet sumChargeDataset = pmtGroup.createDataSet("sumCharge", H5::PredType::NATIVE_FLOAT, FeatureSpace);
+                // sumChargeDataset.write(sumCharge[i].data(), H5::PredType::NATIVE_FLOAT);
+                // sumChargeDataset.close();
+
+                // H5::DataSet FHTDataset = pmtGroup.createDataSet("FHT", H5::PredType::NATIVE_FLOAT, FeatureSpace);
+                // FHTDataset.write(FHT[i].data(), H5::PredType::NATIVE_FLOAT);
+                // FHTDataset.close();
             }
 
             file.close();
@@ -447,6 +517,7 @@ public:
 
 class SignalProcessor {
 public:
+    // This is now a bit useless
     static double PeakCharge(const std::vector<short unsigned int>& signal) {
         return *std::max_element(signal.begin(), signal.end());
     }
@@ -487,11 +558,30 @@ std::string nuTypeString(int pdg) {
 
 int main() {
     EventData eventData;
-    eventData.loadDetSimEDM("data/detsimAtmos.root");
-    eventData.loadCalibEDM("data/calibAtmos.root");
 
-    std::string filename = "data/test.h5";
-    eventData.h5Test(filename);
+    std::string detsimfile = "data/Mu/detsimWP.root";
+    std::string calibfile = "data/atmos/calibAtmos.root";
+
+    // eventData.loadDetSimEDM(detsimfile);
+    eventData.loadCalibEDM(calibfile);
+
+    // Print the contents of eventTracks
+    // for (const auto& event : eventData.eventTracks) {
+    //     int eventID = event.first;
+    //     const auto& tracks = event.second;
+
+    //     std::cout << "Event ID: " << eventID << std::endl;
+    //     for (const auto& track : tracks) {
+    //         std::cout << "Track: ";
+    //         for (const auto& value : track) {
+    //             std::cout << value << " ";
+    //         }
+    //         std::cout << std::endl;
+    //     }
+    // }
+
+    std::string filename = "data/libAtmos.h5";
+    eventData.h5Save(filename);
 
     return 0;
 }
