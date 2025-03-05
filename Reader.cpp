@@ -5,9 +5,15 @@
 #include <H5Cpp.h>
 #include <TFile.h>
 #include <TTree.h>
+#include <TCanvas.h>
+#include <TH1F.h>
+#include <TPaveStats.h>
+#include <TLatex.h>
+#include <TStyle.h>
 #include <TVector3.h>
 #include <Event/CdWaveformHeader.h>
 #include <Event/CdLpmtCalibHeader.h>
+#include <Event/CdTriggerHeader.h>
 #include <Event/SimHeader.h>
 #include <Event/GenHeader.h>
 #include <Event/SimEvt.h>
@@ -28,9 +34,6 @@ std::vector<float> flatten(const std::vector<std::vector<float>>& vect) {
     }
     return flat;
 }
-
-#include <iostream>
-#include <cmath>
 
 struct Vec3 {
     double x, y, z;
@@ -116,13 +119,6 @@ public:
     std::vector<int> muType;
 
     // Calib data
-    std::vector<std::vector<int>> pmtID;
-    std::vector<std::vector<float>> Phi;
-    std::vector<std::vector<float>> Theta;
-    std::vector<std::vector<float>> maxCharge;
-    std::vector<std::vector<float>> maxTime;
-    std::vector<std::vector<float>> sumCharge;
-    std::vector<std::vector<float>> FHT;
     std::vector<std::vector<int>> PDGid;
     std::vector<std::vector<std::vector<float>>> featureVector;
     
@@ -181,7 +177,7 @@ public:
                 adcValuesEvent.push_back(adc);
             }
 
-            pmtID.push_back(pmt);
+            // pmtID.push_back(pmt);
             adcValues.push_back(adcValuesEvent);
         }
         
@@ -304,6 +300,8 @@ public:
 
         std::cout << "CalibMax: " << calibMax << std::endl;
 
+        TH1F *invalidCpNo = new TH1F("invalidCpNo", "Invalid Copy Number", 1000, 279000000, 401000000);
+
         MaxEvents = calibMax;
 
         for(int i = 0; i < calibMax; i++){
@@ -318,31 +316,16 @@ public:
             std::vector<std::vector<float>> calibFeatures;
             calibFeatures.reserve(MAX_PMTID);
 
-            // std::vector<float> calibPhi;
-            // std::vector<float> calibTheta;
-            // std::vector<float> calibmaxCharge;
-            // std::vector<float> calibmaxTime;
-            // std::vector<float> calibsumCharge;
-            // std::vector<float> calibFHT;
-            // calibmaxCharge.reserve(calibSize);
-            // calibmaxTime.reserve(calibSize);
-            // calibsumCharge.reserve(calibSize);
-            // calibFHT.reserve(calibSize);
-
             for(auto it = calibCh.begin(); it != calibCh.end(); ++it){
                 int CalibId = CdID::module(Identifier((*it)->pmtId()));
                 
                 if(CalibId < 0){
-                    std::cerr << "Error! Invalid CalibID" << std::endl;
-                    std::cerr << "CalibID: " << CalibId << std::endl;
+                    invalidCpNo->Fill((*it)->pmtId());
+                    continue;
                 }
 
                 float phiIt = JUNOPMTLocation::get_instance().GetPMTPhi(CalibId);
                 float thetaIt = JUNOPMTLocation::get_instance().GetPMTTheta(CalibId);
-
-                // calibPhi.push_back(phiIt);
-                // calibTheta.push_back(thetaIt);
-
 
                 float maxChargeIt   = (*it)->maxCharge();
                 float maxTimeIt     = (*it)->time()[(*it)->maxChargeIndex()];
@@ -357,66 +340,67 @@ public:
                 features.push_back(maxTimeIt);
                 features.push_back(maxChargeIt);
                 features.push_back(sumChargeIt);
-                
-
-                // calibmaxCharge.push_back(maxChargeIt);
-                // calibmaxTime.push_back(maxTimeIt);
-                // calibsumCharge.push_back(sumChargeIt);
-                // calibFHT.push_back(FHTIt);
 
                 calibFeatures.push_back(features);
                 features.clear();
                 calibChID.push_back(CalibId);
             }
 
-            for(int j = 0; j < MAX_PMTID; j++){
-                if(std::find(calibChID.begin(), calibChID.end(), j) == calibChID.end()){
-                    std::vector<float> features;
+            // for(int j = 0; j < MAX_PMTID; j++){
+            //     if(std::find(calibChID.begin(), calibChID.end(), j) == calibChID.end()){
+            //         std::vector<float> features;
 
-                    features.push_back(JUNOPMTLocation::get_instance().GetPMTPhi(j));
-                    features.push_back(JUNOPMTLocation::get_instance().GetPMTTheta(j));
-                    features.push_back(0);
-                    features.push_back(0);
-                    features.push_back(0);
-                    features.push_back(0);
+                    // features.push_back(JUNOPMTLocation::get_instance().GetPMTPhi(j));
+                    // features.push_back(JUNOPMTLocation::get_instance().GetPMTTheta(j));
+                    // features.push_back(0);
+                    // features.push_back(0);
+                    // features.push_back(0);
+                    // features.push_back(0);
 
-                    // calibPhi.push_back(JUNOPMTLocation::get_instance().GetPMTPhi(j));
-                    // calibTheta.push_back(JUNOPMTLocation::get_instance().GetPMTTheta(j));
-                    // calibmaxCharge.push_back(0);
-                    // calibmaxTime.push_back(0);
-                    // calibsumCharge.push_back(0);
-                    // calibFHT.push_back(0);
-                    // calibChID.push_back(j);
-
-                    calibFeatures.push_back(features);
-                    features.clear();
-                }
-            }
-
-            std::cout << "Calib Event: " << i << std::endl;
+            //         calibFeatures.push_back(features);
+            //         features.clear();
+            //     }
+            // }
 
             featureVector.push_back(calibFeatures);
             calibFeatures.clear();
-
-            // Phi.push_back(calibPhi);
-            // Theta.push_back(calibTheta);
-            // maxCharge.push_back(calibmaxCharge);
-            // maxTime.push_back(calibmaxTime);
-            // sumCharge.push_back(calibsumCharge);
-            // FHT.push_back(calibFHT);
-
-            // calibPhi.clear();
-            // calibTheta.clear();
-            // calibmaxCharge.clear();
-            // calibmaxTime.clear();
-            // calibsumCharge.clear();
-            // calibFHT.clear();
-            
-            // pmtID.push_back(calibChID);
-            // calibChID.clear();
         }
 
+        int uniqueCopyID = 0;
+
+        // Count unique nonzero bins
+        for (int iHist = 1; iHist <= invalidCpNo->GetNbinsX(); iHist++) {  // Bins start at 1 in ROOT
+            if (invalidCpNo->GetBinContent(iHist) > 0) {
+                uniqueCopyID++;
+            }
+        }
+        
+        // Step 1: Create Canvas and Draw Histogram
+        TCanvas *canvasCpNo = new TCanvas("canvasCpNo", "Invalid Copy Number", 800, 600);
+        gStyle->SetOptStat(0);
+        invalidCpNo->Draw();
+
+        // Step 2: Add custom stats
+        std::string uniqueCopyIDText = "Unique Invalid Copy Numbers: " + std::to_string(uniqueCopyID);
+        TLatex *text = new TLatex(0.2, 0.75, uniqueCopyIDText.c_str());
+        text->SetNDC();
+        text->SetTextSize(0.03);
+        text->Draw();
+        
+        canvasCpNo->Modified();
+        canvasCpNo->Update();
+        canvasCpNo->SaveAs("invalidCpNo.pdf");
+        
+        // Cleanup
+        delete text;
+        delete invalidCpNo;
+        delete canvasCpNo;
+    
+        delete cal;
+        delete calib;
+
         calibEDM->Close();
+        delete calibEDM;
     }
 
     void h5Save(const std::string& filename) {
@@ -560,7 +544,7 @@ int main() {
     EventData eventData;
 
     std::string detsimfile = "data/Mu/detsimWP.root";
-    std::string calibfile = "data/atmos/calibAtmos.root";
+    std::string calibfile = "data/productions/J24_GENIE_Flat_FC/rec_nu_e/rec-0.root";
 
     // eventData.loadDetSimEDM(detsimfile);
     eventData.loadCalibEDM(calibfile);

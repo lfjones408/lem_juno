@@ -102,13 +102,15 @@ def line_sphere_intersection(x0, y0, z0, x1, y1, z1, r):
 # Load the data
 filename = 'data/libAtmos.h5'
 
+event_count = 0
+
 with h5py.File(filename, 'r') as f:
     # Iterate over each event in the HDF5 file
     for event_key in f.keys():
         print(f"Processing {event_key}")
 
         # Create a directory for the current event
-        event_dir = f'plots/Atmos/{event_key}_rotation'
+        event_dir = f'plots/productions/J24_1_2/rec-0/{event_key}'
         os.makedirs(event_dir, exist_ok=True)
 
         # Load the data for the current event
@@ -403,6 +405,11 @@ with h5py.File(filename, 'r') as f:
 
         plt.savefig(f'{event_dir}/features_2d.pdf')
         plt.close(fig3)
+
+        event_count += 1
+
+        if event_count >= 10:
+            break
 
         # marker_sizes = (Event_maxCharge / np.max(Event_maxCharge)) * 10
 

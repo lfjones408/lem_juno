@@ -6,3 +6,4 @@ test/
 
 # Ignore Unessary Files Types
 *.exe
+*.pdf
