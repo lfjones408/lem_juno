@@ -12,11 +12,21 @@ with h5py.File('data/libAtmos.h5', 'r') as file:
     file.visititems(print_structure)
 
     for key in file.keys():
-        featurePath = f'{key}/PMT/FeatureVector'
-        featureVector = file[featurePath][:]
+        event = file[key]
 
-        # muTrackPath = f'{key}/muTrack'
-        # muTrack = file[muTrackPath][:]
+        for key2 in event.keys():
+            if key2 == 'Energy' or key2 == 'Zenith' or key2 == 'NuType':
+                continue
+            print(event[key2])
 
-        # print(f'Feature vector shape: {featureVector.shape}')
-        # print(f'Muon track shape: {muTrack.shape}')
+            pmt_event = event[key2]
+
+            Trigger_data = pmt_event['PMT_Features'][:]
+            print(Trigger_data[:, 0])
+   
+
+        print(event['Energy'][()])
+        print(event['Zenith'][()])
+        print(event['NuType'][()])
+
+       

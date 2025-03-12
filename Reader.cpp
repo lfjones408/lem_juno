@@ -204,6 +204,30 @@ public:
 
             simid = se->getEventID();
 
+            std::cout << "-------- Event ID: " << simid << " --------" << std::endl;
+
+            auto tracks = se->getTracksVec();
+            int countTrks = 0;
+
+            for(auto itTrk = tracks.begin(); itTrk != tracks.end(); ++itTrk){
+                float edep = (*itTrk)->getEdep();
+                
+                if(edep < 100){
+                    continue;
+                }
+
+                countTrks++;
+
+                float initTime = (*itTrk)->getInitT();
+                float finalTime = (*itTrk)->getExitT();
+
+                std::cout << "Edep: " << edep << std::endl
+                          << " InitTime: " << initTime << std::endl
+                          << " FinalTime: " << finalTime << std::endl;
+            }
+
+            std::cout << "Number of Tracks: " << countTrks << std::endl;
+
             for(auto iVtx = hepmc_genevt->vertices_begin(); iVtx != hepmc_genevt->vertices_end(); ++iVtx){
 
                 for(auto iPart = (*iVtx)->particles_in_const_begin(); iPart != (*iVtx)->particles_in_const_end(); ++iPart){
@@ -463,10 +487,10 @@ int main() {
     std::string calibfile = "data/productions/J24_GENIE_Flat_FC/rec_nu_e/rec-0.root";
 
     eventData.loadDetSimEDM(detsimfile);
-    eventData.loadCalibEDM(calibfile);
+    // eventData.loadCalibEDM(calibfile);
 
-    std::string filename = "data/libAtmos.h5";
-    eventData.h5Save(filename);
+    // std::string filename = "data/libAtmos.h5";
+    // eventData.h5Save(filename);
 
     return 0;
 }
