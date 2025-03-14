@@ -22,6 +22,7 @@
 #include <Identifier/CdID.h>
 #include <map>
 #include <vector>
+#include <unordered_set>
 
 const int MAX_TIMESTEPS = 1000;
 const int MAX_PMTID = 17612;
@@ -85,9 +86,7 @@ public:
         while (std::getline(ss, token, ' ')) {
             tokens.push_back(token);
         }
-        // an assumption that the csv file is well formatted
-        // and the first column is pmtid
-        // and one by one in order
+
         m_pmt_pos.emplace_back(std::stod(tokens[1]), std::stod(tokens[2]),
                                 std::stod(tokens[3]));
         max_pmt_id++;
@@ -108,13 +107,7 @@ private:
 
 class EventData {
 public:
-    // Elecsim data (not used)
-    std::vector<std::vector<std::vector<short unsigned int>>> adcValues;
-
     // Detsim data
-    // std::vector<std::vector<float>> Edep;
-    // std::vector<std::vector<std::vector<float>>> EdepPos;
-    // std::vector<std::vector<float>> vertex;
     std::vector<float> energy;
     std::vector<float> zenith; 
     std::vector<int> nuType;
@@ -123,42 +116,9 @@ public:
     std::vector<std::vector<int>> PDGid;
     std::vector<std::vector<std::vector<float>>> featureVector;
     std::map<int, std::vector<std::vector<std::vector<float>>>> pmtData;
+    std::unordered_set<int> evtList;
     
     int MaxEvents;
-
-    // Add a new member variable to store tracks by event ID
-    std::map<int, std::vector<std::vector<float>>> eventTracks;
-
-    void loadElecEDM(const std::string& filename) {
-        TFile *elecEDM = TFile::Open(filename.c_str());
-        if (!elecEDM || elecEDM->IsZombie()) {
-            std::cerr << "Error opening elecsim file" << std::endl;
-            return;
-        }       
-        
-        TTree *triggerEvt = (TTree*)elecEDM->Get("Event/CdTrigger/CdTriggerEvt");
-        if (!triggerEvt) {
-            std::cerr << "Error accessing TTree in elecsim file" << std::endl;
-            return;
-        }
-
-        JM::CdTriggerEvt *trigger = new JM::CdTriggerEvt();
-        triggerEvt->SetBranchAddress("CdTriggerEvt", &trigger);
-        triggerEvt->GetBranch("CdTriggerEvt")->SetAutoDelete(true);
-
-        int TriggerMax = triggerEvt->GetEntries();
-        std::cout << "TriggerMax: " << TriggerMax << std::endl;
-
-        for(int i = 0; i < TriggerMax; i++){
-            triggerEvt->GetEntry(i);
-
-            auto timeTrig = trigger->triggerTime();
-            // std::cout << "Trigger Time: " << timeTrig << std::endl;
-        }
-
-        elecEDM->Close();
-        delete elecEDM;
-    }
 
     void loadDetSimEDM(const std::string& filename) {
         TFile *detEDM = TFile::Open(filename.c_str());
@@ -187,8 +147,10 @@ public:
         genevt->GetBranch("GenEvt")->SetAutoDelete(true);
 
         int GenMax = genevt->GetEntries();
+        int SimMax = simevt->GetEntries();
 
         std::cout << "GenMax: " << GenMax << std::endl;
+        std::cout << "SimMax: " << SimMax << std::endl;
 
         int simid = -1;
 
@@ -204,41 +166,19 @@ public:
 
             simid = se->getEventID();
 
-            std::cout << "-------- Event ID: " << simid << " --------" << std::endl;
+            if(evtList.find(simid) != evtList.end()){
+                for(auto iVtx = hepmc_genevt->vertices_begin(); iVtx != hepmc_genevt->vertices_end(); ++iVtx){
 
-            auto tracks = se->getTracksVec();
-            int countTrks = 0;
-
-            for(auto itTrk = tracks.begin(); itTrk != tracks.end(); ++itTrk){
-                float edep = (*itTrk)->getEdep();
-                
-                if(edep < 100){
-                    continue;
-                }
-
-                countTrks++;
-
-                float initTime = (*itTrk)->getInitT();
-                float finalTime = (*itTrk)->getExitT();
-
-                std::cout << "Edep: " << edep << std::endl
-                          << " InitTime: " << initTime << std::endl
-                          << " FinalTime: " << finalTime << std::endl;
-            }
-
-            std::cout << "Number of Tracks: " << countTrks << std::endl;
-
-            for(auto iVtx = hepmc_genevt->vertices_begin(); iVtx != hepmc_genevt->vertices_end(); ++iVtx){
-
-                for(auto iPart = (*iVtx)->particles_in_const_begin(); iPart != (*iVtx)->particles_in_const_end(); ++iPart){
-                    const auto& part_momentum = (*iPart)->momentum();
-
-                    int pdgid = (*iPart)->pdg_id();
-
-                    if(pdgid == 12 || pdgid == -12 || pdgid == 14 || pdgid == -14){
-                        nuType.push_back(pdgid);
-                        energy.push_back(part_momentum.e());
-                        zenith.push_back(part_momentum.theta());
+                    for(auto iPart = (*iVtx)->particles_in_const_begin(); iPart != (*iVtx)->particles_in_const_end(); ++iPart){
+                        const auto& part_momentum = (*iPart)->momentum();
+    
+                        int pdgid = (*iPart)->pdg_id();
+    
+                        if(pdgid == 12 || pdgid == -12 || pdgid == 14 || pdgid == -14){
+                            nuType.push_back(pdgid);
+                            energy.push_back(part_momentum.e());
+                            zenith.push_back(part_momentum.theta());
+                        }
                     }
                 }
             }
@@ -266,27 +206,31 @@ public:
             return;
         }
 
-        JM::SimEvt *sim = new JM::SimEvt();
-        simCalib->SetBranchAddress("SimEvt", &sim);
-        simCalib->GetBranch("SimEvt")->SetAutoDelete(true);
-
         JM::CdLpmtCalibEvt *cal = new JM::CdLpmtCalibEvt();
         calib->SetBranchAddress("CdLpmtCalibEvt", &cal);
         calib->GetBranch("CdLpmtCalibEvt")->SetAutoDelete(true);
 
+        JM::SimEvt *sim = new JM::SimEvt();
+        simCalib->SetBranchAddress("SimEvt", &sim);
+        simCalib->GetBranch("SimEvt")->SetAutoDelete(true);
+
         int calibMax = calib->GetEntries();
+        int simMax = simCalib->GetEntries();
 
         std::cout << "CalibMax: " << calibMax << std::endl;
-
-        TH1F *invalidCpNo = new TH1F("invalidCpNo", "Invalid Copy Number", 1000, 279000000, 401000000);
-
-        MaxEvents = calibMax;
+        std::cout << "SimCalibMax: " << simMax << std::endl;
 
         for(int i = 0; i < calibMax; i++){
             calib->GetEntry(i);
             simCalib->GetEntry(i);
 
             int evtid = sim->getEventID();
+
+            if (evtList.find(evtid) != evtList.end()) {
+                continue;
+            }
+
+            evtList.insert(evtid);
 
             const auto &calibCh = cal->calibPMTCol();
 
@@ -299,11 +243,6 @@ public:
 
             for(auto it = calibCh.begin(); it != calibCh.end(); ++it){
                 int CalibId = CdID::module(Identifier((*it)->pmtId()));
-                
-                if(CalibId < 0){
-                    invalidCpNo->Fill((*it)->pmtId());
-                    continue;
-                }
 
                 float phiIt = JUNOPMTLocation::get_instance().GetPMTPhi(CalibId);
                 float thetaIt = JUNOPMTLocation::get_instance().GetPMTTheta(CalibId);
@@ -327,22 +266,6 @@ public:
                 calibChID.push_back(CalibId);
             }
 
-            // for(int j = 0; j < MAX_PMTID; j++){
-            //     if(std::find(calibChID.begin(), calibChID.end(), j) == calibChID.end()){
-            //         std::vector<float> features;
-
-                    // features.push_back(JUNOPMTLocation::get_instance().GetPMTPhi(j));
-                    // features.push_back(JUNOPMTLocation::get_instance().GetPMTTheta(j));
-                    // features.push_back(0);
-                    // features.push_back(0);
-                    // features.push_back(0);
-                    // features.push_back(0);
-
-            //         calibFeatures.push_back(features);
-            //         features.clear();
-            //     }
-            // }
-
             featureVector.push_back(calibFeatures);
             pmtData[evtid].push_back(calibFeatures);
             calibFeatures.clear();
@@ -360,65 +283,36 @@ public:
         // Create or overwrite the HDF5 file
         H5::H5File file(filename, H5F_ACC_TRUNC);
 
-        std::cout << "Saving " << pmtData.size() << " events to " << filename << std::endl;
+        std::cout << "Saving " << featureVector.size() << " events to " << filename << std::endl;
 
-        for (const auto& event : pmtData) {
-            int eventID = event.first;
-            const auto& iterations = event.second;
-
+        for (int iH5 = 0; iH5 < featureVector.size(); iH5++) {
             // Create a group for each event
-            std::string eventGroupPath = "/Event_" + std::to_string(eventID);
+            std::string eventGroupPath = "/Event_" + std::to_string(iH5);
             H5::Group eventGroup(file.createGroup(eventGroupPath));
-
-            std::cout << "Event " << eventID << " has " << iterations.size() << " iterations." << std::endl;
 
             H5::DataSpace scalarDataspace = H5::DataSpace(H5S_SCALAR);
             
             // Save event-level data
-            H5::DataSet energyDataset = eventGroup.createDataSet("Energy", H5::PredType::NATIVE_FLOAT, scalarDataspace);
-            energyDataset.write(&energy[eventID], H5::PredType::NATIVE_FLOAT);
+            H5::DataSet energyDataset = eventGroup.createDataSet("energy", H5::PredType::NATIVE_FLOAT, scalarDataspace);
+            energyDataset.write(&energy[iH5], H5::PredType::NATIVE_FLOAT);
+            energyDataset.close();
 
-            H5::DataSet zenithDataset = eventGroup.createDataSet("Zenith", H5::PredType::NATIVE_FLOAT, scalarDataspace);
-            zenithDataset.write(&zenith[eventID], H5::PredType::NATIVE_FLOAT);
+            H5::DataSet zenithDataset = eventGroup.createDataSet("zenith", H5::PredType::NATIVE_FLOAT, scalarDataspace);
+            zenithDataset.write(&zenith[iH5], H5::PredType::NATIVE_FLOAT);
+            zenithDataset.close();
 
-            H5::DataSet nuTypeDataset = eventGroup.createDataSet("NuType", H5::PredType::NATIVE_INT, scalarDataspace);
-            nuTypeDataset.write(&nuType[eventID], H5::PredType::NATIVE_FLOAT);
+            H5::DataSet nuTypeDataset = eventGroup.createDataSet("nuType", H5::PredType::NATIVE_INT, scalarDataspace);
+            nuTypeDataset.write(&nuType[iH5], H5::PredType::NATIVE_INT);
+            nuTypeDataset.close();
 
-            for (size_t iterIdx = 0; iterIdx < iterations.size(); ++iterIdx) {
-                const auto& pmtList = iterations[iterIdx];
+            // Save pmt-level data
+            hsize_t dimsfeatureSpace[2] = {featureVector[iH5].size(), featureVector[iH5][0].size()};
+            H5::DataSpace featureSpace(2, dimsfeatureSpace);
+            std::vector<float> flatfeatureVector = flatten(featureVector[iH5]);
 
-                // Create a subgroup for each iteration
-                std::string iterationGroupPath = eventGroupPath + "/Trigger_" + std::to_string(iterIdx);
-                H5::Group iterationGroup(file.createGroup(iterationGroupPath));
-
-                if (pmtList.empty()) {
-                    std::cerr << "Warning: Empty PMT list in Event " << eventID << " Iteration " << iterIdx << std::endl;
-                    continue;
-                }
-
-                // Determine dimensions for HDF5 dataset
-                hsize_t dims[2] = { pmtList.size(), pmtList[0].size() };  // [Number of PMTs, Number of Features]
-
-                // Create dataspace
-                H5::DataSpace dataspace(2, dims);
-
-                // Flatten PMT data for writing
-                std::vector<float> flatData;
-                for (const auto& pmt : pmtList) {
-                    flatData.insert(flatData.end(), pmt.begin(), pmt.end());
-                }
-
-                // Create dataset in the iteration group
-                H5::DataSet dataset = iterationGroup.createDataSet(
-                    "PMT_Features", H5::PredType::NATIVE_FLOAT, dataspace
-                );
-
-                // Write data to dataset
-                dataset.write(flatData.data(), H5::PredType::NATIVE_FLOAT);
-
-                std::cout << "Saved Iteration " << iterIdx << " in Event " << eventID 
-                        << " with " << pmtList.size() << " PMTs." << std::endl;
-            }
+            H5::DataSet featureVectorDataset = eventGroup.createDataSet("featureVector", H5::PredType::NATIVE_FLOAT, featureSpace);
+            featureVectorDataset.write(flatfeatureVector.data(), H5::PredType::NATIVE_FLOAT);
+            featureVectorDataset.close();
         }
 
         file.close();
@@ -439,39 +333,6 @@ public:
 
 };
 
-class SignalProcessor {
-public:
-    // This is now a bit useless
-    static double PeakCharge(const std::vector<short unsigned int>& signal) {
-        return *std::max_element(signal.begin(), signal.end());
-    }
-
-    static double PeakChargeTime(const std::vector<short unsigned int>& signal) {
-        auto maxIter = std::max_element(signal.begin(), signal.end());
-        return std::distance(signal.begin(), maxIter);
-    }
-
-    static double FHT(const std::vector<short unsigned int>& signal) {
-        double minValue = *std::min_element(signal.begin(), signal.end());
-        double threshold = 0.5 * (PeakCharge(signal) - minValue);
-
-        for(size_t i = 0; i < signal.size(); i++){
-            if((signal[i] - minValue) > threshold){
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    static double totalCharge(const std::vector<short unsigned int>& signal) {
-        double total = 0;
-        for(size_t i = 0; i < signal.size(); i++){
-            total += signal[i];
-        }
-        return total;
-    }
-};
-
 std::string nuTypeString(int pdg) {
     if(pdg == 12) return "NuE";
     else if(pdg == -12) return "NuEBar";
@@ -483,14 +344,52 @@ std::string nuTypeString(int pdg) {
 int main() {
     EventData eventData;
 
-    std::string detsimfile = "data/productions/J24_GENIE_Flat_FC/detsim_nu_e/detsim-0.root";
-    std::string calibfile = "data/productions/J24_GENIE_Flat_FC/rec_nu_e/rec-0.root";
+    std::vector<std::string> detsimFiles;
+    std::vector<std::string> calibFiles;
 
-    eventData.loadDetSimEDM(detsimfile);
-    // eventData.loadCalibEDM(calibfile);
+    std::ifstream detsimList("data/fileLists/detsim_nu_e.txt");
+    std::ifstream calibList("data/fileLists/rec_nu_e.txt");
+    if(!detsimList.is_open()){
+        std::cerr << "Error opening file!";
+        return 1;
+    }
 
-    // std::string filename = "data/libAtmos.h5";
-    // eventData.h5Save(filename);
+    std::string filepathDetsim, filepathCalib;
+
+    for(int itPath = 0; itPath < 100; itPath++){
+        if(std::getline(detsimList, filepathDetsim)){
+            detsimFiles.push_back(filepathDetsim);
+        }
+
+        if(std::getline(calibList, filepathCalib)){
+            calibFiles.push_back(filepathCalib);
+        }
+    }
+
+    std::cout << "No files: " << detsimFiles.size() << std::endl;
+
+    for(int iFile = 0; iFile < detsimFiles.size(); iFile++){
+        std::string eosPath = "root://junoeos01.ihep.ac.cn/";
+        std::string iterCalib = eosPath + calibFiles.at(iFile);
+        std::string iterDetsim = eosPath + detsimFiles.at(iFile);
+
+        std::cout << "calibeos path: " << iterCalib << std::endl;
+
+        eventData.loadCalibEDM(iterCalib);
+        eventData.loadDetSimEDM(iterDetsim);
+
+        eventData.evtList.clear();
+    }
+    
+
+    for(int i = 0; i < eventData.featureVector.size(); i++){
+        std::cout << "Event " << i << " length: " << eventData.featureVector[i].size() << std::endl;
+        std::cout << "Energy: " << eventData.energy[i] << std::endl;
+        std::cout << "ParticleID: " << eventData.nuType[i] << std::endl; 
+    }
+
+    std::string filename = "/junofs/users/ljones/lem_juno/data/libAtmos.h5";
+    eventData.h5Save(filename);
 
     return 0;
 }
