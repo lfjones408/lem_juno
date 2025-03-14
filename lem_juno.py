@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import h5py
+import ROOT
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from scipy.spatial import KDTree
@@ -54,37 +55,41 @@ def rotate(r, theta, phi, alpha, beta, gamma):
     return r, theta, phi
 
 def comparissonPlot(event1, event2):
-    phi1 = event1['PMT/Phi'][:]
-    theta1 = event1['PMT/Theta'][:]
+    pmt1 = event1.get('featureVector')
+    phi1 = pmt1[:,0]
+    theta1 = pmt1[:,1]
     theta1 = np.pi/2 - theta1
 
-    phi2 = event2['PMT/Phi'][:]
-    theta2 = event2['PMT/Theta'][:]
+    pmt2 = event2.get('featureVector')
+    phi2 = pmt2[:,0]
+    theta2 = pmt2[:,1]
     theta2 = np.pi/2 - theta2
 
-    features = ['PMT/maxCharge', 'PMT/sumCharge', 'PMT/maxTime', 'PMT/FHT']
+    featureMap = [2, 3, 4, 5]
+    features = ['maxCharge', 'sumCharge', 'maxTime', 'FHT']
     
     fig, axs = plt.subplots(4, 2, figsize=(24, 18), subplot_kw=dict(projection="mollweide"))
     axs = axs.flatten()
 
     # Set titles for each column
-    title1 = 'Input Event: E={:.2f} MeV, Position=({:.2f}, {:.2f}, {:.2f})m, NuType={}'.format(event1['energy'][()], event1['vertex'][()][0]/1e3, event1['vertex'][()][1]/1e3, event1['vertex'][()][2]/1e3, PDG2Name(event1['nuType'][()]))
-    title2 = 'Match Event: E={:.2f} MeV, Position=({:.2f}, {:.2f}, {:.2f})m, NuType={}'.format(event2['energy'][()], event2['vertex'][()][0]/1e3, event2['vertex'][()][1]/1e3, event2['vertex'][()][2]/1e3, PDG2Name(event2['nuType'][()]))
+    title1 = 'Input Event: E={:.2f} MeV, Zenith={:.2f}, NuType={}'.format(event1['energy'][()], event1['zenith'][()], PDG2Name(event1['nuType'][()]))
+    title2 = 'Match Event: E={:.2f} MeV, Zenith={:.2f}, NuType={}'.format(event2['energy'][()], event2['zenith'][()], PDG2Name(event2['nuType'][()]))
     fig.text(0.27, 0.95, title1, ha='center', fontsize=16)
     fig.text(0.73, 0.95, title2, ha='center', fontsize=16)
-    
+
     for i, feature in enumerate(features):
         # Filter out phi and theta values where the feature value is 0
-        mask1 = np.array(event1[feature]) != 0
-        mask2 = np.array(event2[feature]) != 0
+        map = featureMap[i]
+        mask1 = np.array(pmt1[:, map]) != 0
+        mask2 = np.array(pmt2[:, map]) != 0
 
         filtered_phi1 = phi1[mask1]
         filtered_theta1 = theta1[mask1]
-        filtered_feature1 = event1[feature][mask1]
+        filtered_feature1 = pmt1[:, map][mask1]
 
         filtered_phi2 = phi2[mask2]
         filtered_theta2 = theta2[mask2]
-        filtered_feature2 = event2[feature][mask2]
+        filtered_feature2 = pmt2[:, map][mask2]
 
         # Plot the data
         locals()[f'LHS_{feature}'] = axs[2*i].scatter(filtered_phi1, filtered_theta1, c=filtered_feature1, cmap='plasma', marker='o', s=2, alpha=0.8)
@@ -107,15 +112,45 @@ def comparissonPlot(event1, event2):
 
     name = event1.name.split('/')[-1]
 
-    plot_dir = f'plots/{name}'
+    plot_dir = f'plots/lem_comparison'
+    print(f"Saving plots to {plot_dir}")
     os.makedirs(plot_dir, exist_ok=True)
 
     plt.savefig(f'{plot_dir}/bestMatch.pdf')
 
+def similarityPlot(similarity, energies, zenith):
+    energies = np.array(energies, dtype='float64')
+    zenith = np.array(zenith, dtype='float64')
+    similarity = np.array(similarity, dtype='float64')
+
+    graphEnergy = ROOT.TGraph(len(energies), np.array(energies), np.array(similarity))
+    graphEnergy.GetXaxis().SetTitle("E_{Event} - E_{Test}")
+    graphEnergy.GetYaxis().SetTitle("Similarity")
+    graphEnergy.SetMarkerStyle(20)
+    graphEnergy.SetLineWidth(2)
+    graphEnergy.SetTitle("Energy vs Similarity")
+
+    canvasEnergy = ROOT.TCanvas("canvasEnergy", "canvasEnergy", 800, 600)
+    graphEnergy.Draw("AP")
+    canvasEnergy.SaveAs("plots/lem_comparison/similarityEnergy.pdf")
+
+    graphZenith = ROOT.TGraph(len(zenith), np.array(zenith), np.array(similarity))
+    graphZenith.GetXaxis().SetTitle("Zenith_{Event} - Zenith_{Test}")
+    graphZenith.GetYaxis().SetTitle("Similarity")
+    graphZenith.SetMarkerStyle(20)
+    graphZenith.SetLineWidth(2)
+    graphZenith.SetTitle("Zenith vs Similarity")
+
+    canvasZenith = ROOT.TCanvas("canvasZenith", "canvasZenith", 800, 600)
+    graphZenith.Draw("AP")
+    canvasZenith.SaveAs("plots/lem_comparison/similarityZenith.pdf")
+
 distances = []
+dif_energies = []
+dif_zeniths = []
 
 # Define event data
-filename = 'data/lib.h5'
+filename = 'data/libAtm_big.h5'
 
 # Rotation Test
     
@@ -124,57 +159,48 @@ with h5py.File(filename, 'r') as data:
     testEvent = data['Event_9']
 
     testEvent_energy = testEvent['energy'][()]
-    testEvent_position = (testEvent['vertex'][()])/1e3
+    testEvent_zenith = testEvent['zenith'][()]
     testEvent_nuType = testEvent['nuType'][()]
 
-    testEvent_PMT = testEvent['PMT/FeatureVector'][:]
-    testEvent_Phi = testEvent[testEvent_PMT][:,0]
-    testEvent_Theta = testEvent[testEvent_PMT][:,1]
-    testEvent_FHT = testEvent[testEvent_PMT][:,2]
-    testEvent_maxTime = testEvent[testEvent_PMT][:,3]
-    testEvent_maxCharge = testEvent[testEvent_PMT][:,4]
-    testEvent_sumCharge = testEvent[testEvent_PMT][:,5]
-
-    # testEvent_Phi = testEvent['PMT/Phi'][:]
-    # testEvent_Theta = testEvent['PMT/Theta'][:]
-    # testEvent_maxCharge = testEvent['PMT/maxCharge'][:]
-    # testEvent_sumCharge = testEvent['PMT/sumCharge'][:]
-    # testEvent_maxTime = testEvent['PMT/maxTime'][:]
-    # testEvent_FHT = testEvent['PMT/FHT'][:]
+    testEvent_PMT = testEvent.get('featureVector')[:]
+    testEvent_Phi = testEvent_PMT[:,0]
+    testEvent_Theta = testEvent_PMT[:,1]
+    testEvent_FHT = testEvent_PMT[:,2]
+    testEvent_maxTime = testEvent_PMT[:,3]
+    testEvent_maxCharge = testEvent_PMT[:,4]
+    testEvent_sumCharge = testEvent_PMT[:,5]
 
     # Define weights for each feature
     weights = {
         'maxCharge': 1.0,
         'sumCharge': 1.0,
-        'maxTime': 1.0,
-        'FHT': 1.0
+        'maxTime': 0,
+        'FHT':  0
     }
 
     # Load in Library event data
     for event_keys in data.keys():
-        if event_keys == '/Event_0':
-            continue
-        print(f"Comparing -> {event_keys}")
+        # print(f"Comparing -> {event_keys}")
 
         # Load the data for the current event
         Event_energy = data[f'{event_keys}/energy'][()]
-        Event_position = (data[f'{event_keys}/vertex'][()])/1e3
+        Event_zenith = data[f'{event_keys}/zenith'][()]
         Event_nuType = data[f'{event_keys}/nuType'][()]
 
-        Event_PMT = data[f'{event_keys}/PMT/FeatureVector'][:]
+        dif_energies.append(Event_energy - testEvent_energy)
+        dif_zeniths.append(Event_zenith - testEvent_zenith)
+
+        Event_PMT = data.get(f'{event_keys}/featureVector')[:]
+
+        if len(Event_PMT) != 17612:
+            continue
+
         Event_Phi = Event_PMT[:,0]
         Event_Theta = Event_PMT[:,1]
         Event_FHT = Event_PMT[:,2]
         Event_maxTime = Event_PMT[:,3]
         Event_maxCharge = Event_PMT[:,4]
         Event_sumCharge = Event_PMT[:,5]
-
-        # Event_Phi = data[f'{event_keys}/PMT/Phi'][:]
-        # Event_Theta = data[f'{event_keys}/PMT/Theta'][:]
-        # Event_maxCharge = data[f'{event_keys}/PMT/maxCharge'][:]
-        # Event_sumCharge = data[f'{event_keys}/PMT/sumCharge'][:]
-        # Event_maxTime = data[f'{event_keys}/PMT/maxTime'][:]
-        # Event_FHT = data[f'{event_keys}/PMT/FHT'][:]
 
         # Calculate weighted Euclidean distances
         maxCharge_distance = weights['maxCharge'] * np.linalg.norm(testEvent_maxCharge - Event_maxCharge)
@@ -194,14 +220,21 @@ with h5py.File(filename, 'r') as data:
 
     for i, (event_key, distance) in enumerate(distances):
         distances[i] = (event_key, normalise_distance(distance, maxDistance))
-        print(f"Normalised distance for event {event_key}: {distances[i][1]}")
+        # print(f"Normalised distance for event {event_key}: {distances[i][1]}")
 
     # Find the event with the smallest non-zero distance
     non_zero_distances = [(event_key, d) for event_key, d in distances if d > 0]
     min_event, min_distance = min(non_zero_distances, key=lambda x: x[1])
 
+    similarity = np.array(distances)[:,1]
+
     print(f"The smallest non-zero distance is: {min_distance} for {min_event}")
 
     # Make a comparison plot
     comparissonPlot(testEvent, data[min_event])
+    similarityPlot(similarity, dif_energies, dif_zeniths)
 
+    # TO DO: -> Check dif plots
+    #           -> Zentih and Energy look wrong
+    #           -> Pick 10-50 best?
+    #        -> Add parser option
