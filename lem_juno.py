@@ -3,8 +3,9 @@ import numpy as np
 import h5py
 import ROOT
 import matplotlib.pyplot as plt
-from scipy.optimize import minimize
-from scipy.spatial import KDTree
+from scipy.stats import poisson, norm
+from scipy.integrate import quad
+from scipy.special import gammaln
 
 def normalise_distance(distance, maxDistance):
     return distance / maxDistance
@@ -21,40 +22,7 @@ def PDG2Name(pdg):
     else:
         return 'Unknown'
 
-def spherical2cartesian(r, theta, phi):
-    x = r * np.sin(theta) * np.cos(phi)
-    y = r * np.sin(theta) * np.sin(phi)
-    z = r * np.cos(theta)
-    return x, y, z
-
-def cartesian2spherical(x, y, z):
-    r = np.sqrt(x**2 + y**2 + z**2)
-    theta = np.arccos(z / r)
-    phi = np.arctan2(y, x)
-    return r, theta, phi
-
-def rotate(r, theta, phi, alpha, beta, gamma):
-    Rx = np.array( [[1,             0,              0],
-                    [0, np.cos(alpha), -np.sin(alpha)],
-                    [0, np.sin(alpha),  np.cos(alpha)]])
-    
-    Ry = np.array( [[ np.cos(beta), 0, np.sin(beta)],
-                    [            0, 1,            0],
-                    [-np.sin(beta), 0, np.cos(beta)]])
-    
-    Rz = np.array( [[np.cos(gamma), -np.sin(gamma), 0],
-                    [np.sin(gamma),  np.cos(gamma), 0],
-                    [            0,              0, 1]])
-    
-    R = np.dot(Rz, np.dot(Ry, Rx))
-
-    x, y, z = spherical2cartesian(r, theta, phi)
-    x, y, z = np.dot(R, np.array([x, y, z]))
-    r, theta, phi = cartesian2spherical(x, y, z)
-
-    return r, theta, phi
-
-def comparissonPlot(event1, event2):
+def comparissonPlot(event1, event2, name):
     pmt1 = event1.get('featureVector')
     phi1 = pmt1[:,0]
     theta1 = pmt1[:,1]
@@ -66,7 +34,7 @@ def comparissonPlot(event1, event2):
     theta2 = np.pi/2 - theta2
 
     featureMap = [2, 3, 4, 5]
-    features = ['maxCharge', 'sumCharge', 'maxTime', 'FHT']
+    features = ['FHT', 'maxTime', 'maxCharge', 'sumCharge']
     
     fig, axs = plt.subplots(4, 2, figsize=(24, 18), subplot_kw=dict(projection="mollweide"))
     axs = axs.flatten()
@@ -110,13 +78,11 @@ def comparissonPlot(event1, event2):
         
     plt.tight_layout(rect=[0, 0, 1, 0.93])
 
-    name = event1.name.split('/')[-1]
-
     plot_dir = f'plots/lem_comparison'
     print(f"Saving plots to {plot_dir}")
     os.makedirs(plot_dir, exist_ok=True)
 
-    plt.savefig(f'{plot_dir}/bestMatch.pdf')
+    plt.savefig(f'{plot_dir}/{name}.pdf')
 
 def similarityPlot(similarity, energies, zenith):
     energies = np.array(energies, dtype='float64')
@@ -145,7 +111,32 @@ def similarityPlot(similarity, energies, zenith):
     graphZenith.Draw("AP")
     canvasZenith.SaveAs("plots/lem_comparison/similarityZenith.pdf")
 
+def log_poisson_pmf(k, lambd):
+    poiss = k*np.log(lambd) - lambd - gammaln(k + 1)
+    return poiss
+
+def log_gauss_pmf(x, mean, sigma):
+    gauss = - (1/2)*np.log(2*np.pi*sigma**2) - ((x - mean)**2/(2*(sigma**2)))
+    return gauss
+
+def log_likelihood_noisy(n, mean, sigma):
+    def integrand(lambd):
+        log_poiss = log_poisson_pmf(n, lambd)
+        log_gauss = log_gauss_pmf(lambd, mean, sigma)
+        return np.exp(log_poiss + log_gauss)
+
+    lower = max(0, mean - 5 * sigma)
+    upper = mean + 5 * sigma
+
+    integral, _ = quad(integrand, lower, upper)
+
+    integral, _ = quad(integrand, lower, upper)
+    log_integral = np.log(integral) if integral > 0 else -1000
+
+    return log_integral
+
 distances = []
+sumLikelihood = []
 dif_energies = []
 dif_zeniths = []
 
@@ -153,7 +144,7 @@ dif_zeniths = []
 filename = 'data/libAtm_big.h5'
 
 # Rotation Test
-    
+counter = 0
 
 with h5py.File(filename, 'r') as data:
     testEvent = data['Event_9']
@@ -173,22 +164,24 @@ with h5py.File(filename, 'r') as data:
     # Define weights for each feature
     weights = {
         'maxCharge': 1.0,
-        'sumCharge': 1.0,
+        'sumCharge': 0,
         'maxTime': 0,
-        'FHT':  0
+        'FHT':  1.0
     }
 
     # Load in Library event data
     for event_keys in data.keys():
-        # print(f"Comparing -> {event_keys}")
+        if counter > 10:
+            continue
+
+        print(f"Comparing -> {event_keys}")
+
+        counter = counter + 1 
 
         # Load the data for the current event
         Event_energy = data[f'{event_keys}/energy'][()]
         Event_zenith = data[f'{event_keys}/zenith'][()]
         Event_nuType = data[f'{event_keys}/nuType'][()]
-
-        dif_energies.append(Event_energy - testEvent_energy)
-        dif_zeniths.append(Event_zenith - testEvent_zenith)
 
         Event_PMT = data.get(f'{event_keys}/featureVector')[:]
 
@@ -202,39 +195,73 @@ with h5py.File(filename, 'r') as data:
         Event_maxCharge = Event_PMT[:,4]
         Event_sumCharge = Event_PMT[:,5]
 
-        # Calculate weighted Euclidean distances
-        maxCharge_distance = weights['maxCharge'] * np.linalg.norm(testEvent_maxCharge - Event_maxCharge)
-        sumCharge_distance = weights['sumCharge'] * np.linalg.norm(testEvent_sumCharge - Event_sumCharge)
-        maxTime_distance = weights['maxTime'] * np.linalg.norm(testEvent_maxTime - Event_maxTime)
-        FHT_distance = weights['FHT'] * np.linalg.norm(testEvent_FHT - Event_FHT)
+        # New metric
+        likelihood = []
+        for test, MCdata in zip(testEvent_sumCharge, Event_sumCharge):
+            sig = MCdata*0.1
+            metricIter = log_likelihood_noisy(test, MCdata, sig)
+            if not np.isfinite(metricIter):
+                print(test, MCdata)
+                print(metricIter)
+            likelihood.append(metricIter)
 
-        # Combine distances into a single metric
-        total_distance = (maxCharge_distance + sumCharge_distance +
-                        maxTime_distance + FHT_distance)
-        
-        distances.append((event_keys, total_distance))
+        sumLikelihood.append((event_keys, np.sum(likelihood)))
+        dif_energies.append(Event_energy - testEvent_energy)
+        dif_zeniths.append(Event_zenith - testEvent_zenith)
 
+
+    # Convert the distances to a numpy array
+    sumLikelihood = np.array(sumLikelihood, dtype='object')
+
+    print(sumLikelihood)
+
+    best_match, max_likelihood = max(sumLikelihood, key = lambda x: x[1])
+
+    print(f"Best match is {best_match}, with similarity: {max_likelihood:.2e}")
+
+    # # Normalise the distances
+    # maxDistance = max([d[1] for d in distances])
+
+    # for i, (event_key, distance) in enumerate(distances):
+    #     distances[i] = (event_key, normalise_distance(distance, maxDistance))
+    #     # print(f"Normalised distance for event {event_key}: {distances[i][1]}")
+
+    # # Find the event with the smallest non-zero distance
+    # non_zero_distances = [(event_key, d) for event_key, d in distances if d > 0]
+    # min_event, min_distance = min(non_zero_distances, key=lambda x: x[1])
+
+    # similarity = np.array(distances)[:,1]
+
+    # print(f"The smallest non-zero distance is: {min_distance} for {min_event}")
+
+    # non_zero_distances =  np.array(non_zero_distances)
     
-    # Normalise the distances
-    maxDistance = max([d[1] for d in distances])
+    # smallest_nonzero = np.partition(non_zero_distances[:,1], 10)[:10]
 
-    for i, (event_key, distance) in enumerate(distances):
-        distances[i] = (event_key, normalise_distance(distance, maxDistance))
-        # print(f"Normalised distance for event {event_key}: {distances[i][1]}")
+    # most_similar = non_zero_distances[np.isin(non_zero_distances[:,1], smallest_nonzero)]
 
-    # Find the event with the smallest non-zero distance
-    non_zero_distances = [(event_key, d) for event_key, d in distances if d > 0]
-    min_event, min_distance = min(non_zero_distances, key=lambda x: x[1])
+    # energy_matches = []
+    # zenith_matches = []
 
-    similarity = np.array(distances)[:,1]
+    # print("Most similar events: ")
+    # for evt in most_similar:
+    #     print(f"{evt[0]}: {evt[1]}")
+    #     evtIter = data[f'{evt[0]}']
+    #     # comparissonPlot(testEvent, evtIter, f"comparison {evt[0]}")
+        
+    #     energyIter = evtIter['energy'][()]
+    #     zenithIter = evtIter['zenith'][()]
+    #     energy_matches.append(energyIter)
+    #     zenith_matches.append(zenithIter)
 
-    print(f"The smallest non-zero distance is: {min_distance} for {min_event}")
+    # print(f"Energy : {np.mean(energy_matches)} +- {np.std(energy_matches)/np.sqrt(len(energy_matches))}")
+    # print(f"Zenith : {np.mean(zenith_matches)} +- {np.std(zenith_matches)/np.sqrt(len(zenith_matches))}")
 
-    # Make a comparison plot
-    comparissonPlot(testEvent, data[min_event])
-    similarityPlot(similarity, dif_energies, dif_zeniths)
+    # # Make a comparison plot
+    comparissonPlot(testEvent, data[best_match], "bestMatch")
+    similarityPlot(sumLikelihood[:,1], dif_energies, dif_zeniths)
 
-    # TO DO: -> Check dif plots
-    #           -> Zentih and Energy look wrong
-    #           -> Pick 10-50 best?
+    # TO DO: -> Change to poison statistics
+    #           -> test
+    #           -> optimise sigma
     #        -> Add parser option
